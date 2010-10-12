@@ -2,6 +2,8 @@ package presque::RestQueueHandler;
 
 use 5.010;
 
+use YAML::Syck;
+
 use JSON;
 use Moose;
 extends 'Tatsumaki::Handler';
@@ -63,10 +65,57 @@ sub _fetch_job {
 sub _finish_get {
     my ($self, $queue_name, $job, $key) = @_;
 
+    $self->_remove_from_deps($queue_name, $key);
     $self->_remove_from_uniq($queue_name, $key);
     $self->_update_queue_stats($queue_name, $job);
     $self->_update_worker_stats($queue_name, $job);
     $self->finish($job);
+}
+
+sub _remove_from_deps {
+	my ($self, $queue_name, $key) = @_;
+	my $lkey = $self->_queue($queue_name);
+
+	$self->application->redis->hget(
+		$self->_queue_uniq_revert($queue_name),
+		$key,
+		sub {
+			my $uniq = shift;
+	#warn $self->_deps_queue_uniq_revert($queue_name, $uniq);
+			$self->application->redis->smembers(			
+				$self->_deps_queue_uniq_revert($queue_name, $uniq),
+				sub {
+					my ($deps_revert_uuids) = @_;
+					my $dep_revert_uuid;
+					for $dep_revert_uuid (@$deps_revert_uuids){
+
+	#warn $self->_deps_queue_uuid($dep_revert_uuid) ." x> ". $queue_name.":".$uniq;
+
+						$self->application->redis->srem(
+							$self->_deps_queue_uuid($dep_revert_uuid),
+							$queue_name.":".$uniq
+						);
+						$self->application->redis->scard(
+							$self->_deps_queue_uuid($dep_revert_uuid),	
+							sub {
+								my $total = shift;
+								#warn "TOTAL ". $total . " ". $self->_deps_queue_uuid($dep_revert_uuid);
+								if ($total == 0){
+									$dep_revert_uuid =~ /^([^:]+):(.+)$/;
+									$self->push_job($1, $self->_queue($1), $dep_revert_uuid);
+									$self->application->redis->del(
+										$self->_deps_queue_uuid($dep_revert_uuid)
+									);
+								}	
+							}
+						);
+					}
+					$self->application->redis->del( $self->_deps_queue_uniq_revert($queue_name, $uniq) );
+				}
+			);
+		
+		}
+	);
 }
 
 sub _remove_from_uniq {
@@ -117,6 +166,7 @@ sub _create_job {
     my $input   = $self->request->parameters;
     my $delayed = ($input && $input->{delayed}) ? $input->{delayed} : undef;
     my $uniq    = ($input && $input->{uniq}) ? $input->{uniq} : undef;
+    my $depends = ($input && $input->{depends}) ? $input->{depends} : undef;
 
     if ($uniq) {
         $self->application->redis->hexists(
@@ -125,7 +175,7 @@ sub _create_job {
             sub {
                 my $status = shift;
                 if ($status == 0) {
-                    $self->_insert_to_queue($queue_name, $p, $delayed, $uniq);
+                    $self->_insert_to_queue($queue_name, $p, $delayed, $uniq, $depends);
                 }
                 else {
                     $self->http_error('job already exists');
@@ -134,12 +184,12 @@ sub _create_job {
         );
     }
     else {
-        $self->_insert_to_queue($queue_name, $p, $delayed);
+        $self->_insert_to_queue($queue_name, $p, $delayed, undef, $depends);
     }
 }
 
 sub _insert_to_queue {
-    my ($self, $queue_name, $p, $delayed, $uniq) = @_;
+    my ($self, $queue_name, $p, $delayed, $uniq, $depends) = @_;
 
     $self->application->redis->incr(
         $self->_queue_uuid($queue_name),
@@ -157,8 +207,30 @@ sub _insert_to_queue {
                         $self->application->redis->hset($self->_queue_uniq($queue_name), $uniq, $key);
                         $self->application->redis->hset($self->_queue_uniq_revert($queue_name), $key, $uniq);
                     }
+           			if ($depends){
+						my @uniq_deps = split(',', $depends);
+						for my $uniq_dep (@uniq_deps){
+							my $q_uniq_dep = $queue_name;
+							# dependance sur job d'une queue differente
+							if ($uniq_dep =~ /^([^:]+):(.+)$/){
+								$q_uniq_dep = $1;
+								$uniq_dep = $2;
+							}
+						#warn $self->_deps_queue_uuid($queue_name, $uuid) ." => ". $q_uniq_dep.":".$uniq_dep;
+							$self->application->redis->sadd(
+								$self->_deps_queue_uuid($queue_name, $uuid),
+								$q_uniq_dep.":".$uniq_dep
+							);
+						#warn $self->_deps_queue_uniq_revert($q_uniq_dep, $uniq_dep) ." => ". $key;
+							$self->application->redis->sadd(
+								$self->_deps_queue_uniq_revert($q_uniq_dep, $uniq_dep),
+								$key
+							);
+						}
+					}
+			
                     $self->_finish_post($lkey, $key, $status_set, $delayed,
-                            $queue_name);
+                            $queue_name, $depends);
                 }
             );
         }
@@ -215,9 +287,9 @@ sub _purge_queue {
 }
 
 sub _finish_post {
-    my ($self, $lkey, $key, $result, $delayed, $queue_name) = @_;
+    my ($self, $lkey, $key, $result, $delayed, $queue_name, $depends) = @_;
 
-    $self->push_job($queue_name, $lkey, $key, $delayed);
+    $self->push_job($queue_name, $lkey, $key, $delayed) if not $depends;
     $self->response->code(201);
     $self->finish();
 }

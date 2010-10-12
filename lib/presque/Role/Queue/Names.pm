@@ -46,6 +46,18 @@ sub _queue_stat {
     return join(':', 'queuestat', $queue_name);
 }
 
+sub _deps_queue_uuid{
+    my ($self, $queue_name, $uuid) = @_;
+    return join(':', 'deps', $queue_name, $uuid) if $uuid;
+    return join(':', 'deps', $queue_name);
+}
+
+sub _deps_queue_uniq_revert{
+    my ($self, $queue_name, $uniq) = @_;
+    return join(':', 'deps', 'rev', $queue_name, $uniq) if $uniq;
+    return join(':', 'deps', 'rev', $queue_name);
+}
+
 sub _workers_on_queue {
     my ($self, $queue_name) = @_;
     return join(':', 'workers', $queue_name);
