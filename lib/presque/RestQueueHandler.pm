@@ -56,7 +56,8 @@ sub _fetch_job {
                 );
             }
             else {
-                $self->http_error('no job', 404);
+                $self->response->code(204);
+                $self->finish();
             }
         }
     );
@@ -76,46 +77,50 @@ sub _remove_from_deps {
 	my ($self, $queue_name, $key) = @_;
 	my $lkey = $self->_queue($queue_name);
 
-	$self->application->redis->hget(
-		$self->_queue_uniq_revert($queue_name),
-		$key,
-		sub {
-			my $uniq = shift;
-	#warn $self->_deps_queue_uniq_revert($queue_name, $uniq);
-			$self->application->redis->smembers(			
-				$self->_deps_queue_uniq_revert($queue_name, $uniq),
-				sub {
-					my ($deps_revert_uuids) = @_;
-					my $dep_revert_uuid;
-					for $dep_revert_uuid (@$deps_revert_uuids){
-
-	#warn $self->_deps_queue_uuid($dep_revert_uuid) ." x> ". $queue_name.":".$uniq;
-
-						$self->application->redis->srem(
-							$self->_deps_queue_uuid($dep_revert_uuid),
-							$queue_name.":".$uniq
-						);
-						$self->application->redis->scard(
-							$self->_deps_queue_uuid($dep_revert_uuid),	
-							sub {
-								my $total = shift;
-								#warn "TOTAL ". $total . " ". $self->_deps_queue_uuid($dep_revert_uuid);
-								if ($total == 0){
-									$dep_revert_uuid =~ /^([^:]+):(.+)$/;
-									$self->push_job($1, $self->_queue($1), $dep_revert_uuid);
-									$self->application->redis->del(
-										$self->_deps_queue_uuid($dep_revert_uuid)
-									);
-								}	
-							}
-						);
+    my @keys = (ref $key) ? @$key : ($key);
+    
+    for $key (@keys){
+		$self->application->redis->hget(
+			$self->_queue_uniq_revert($queue_name),
+			$key,
+			sub {
+				my $uniq = shift;
+		#warn $self->_deps_queue_uniq_revert($queue_name, $uniq);
+				$self->application->redis->smembers(			
+					$self->_deps_queue_uniq_revert($queue_name, $uniq),
+					sub {
+						my ($deps_revert_uuids) = @_;
+						my $dep_revert_uuid;
+						for $dep_revert_uuid (@$deps_revert_uuids){
+	
+		#warn $self->_deps_queue_uuid($dep_revert_uuid) ." x> ". $queue_name.":".$uniq;
+	
+							$self->application->redis->srem(
+								$self->_deps_queue_uuid($dep_revert_uuid),
+								$queue_name.":".$uniq
+							);
+							$self->application->redis->scard(
+								$self->_deps_queue_uuid($dep_revert_uuid),	
+								sub {
+									my $total = shift;
+									#warn "TOTAL ". $total . " ". $self->_deps_queue_uuid($dep_revert_uuid);
+									if ($total == 0){
+										$dep_revert_uuid =~ /^([^:]+):(.+)$/;
+										$self->push_job($1, $self->_queue($1), $dep_revert_uuid);
+										$self->application->redis->del(
+											$self->_deps_queue_uuid($dep_revert_uuid)
+										);
+									}	
+								}
+							);
+						}
+						$self->application->redis->del( $self->_deps_queue_uniq_revert($queue_name, $uniq) );
 					}
-					$self->application->redis->del( $self->_deps_queue_uniq_revert($queue_name, $uniq) );
-				}
-			);
-		
-		}
-	);
+				);
+			
+			}
+		);
+	}
 }
 
 sub _remove_from_uniq {
@@ -255,7 +260,7 @@ sub _failed_job {
 sub _purge_queue {
     my ($self, $queue_name) = @_;
 
-    # supprimer tous les jobs
+    # supprimer tous les jobs "pending"
 
     $self->application->redis->llen(
         $self->_queue($queue_name),
@@ -275,6 +280,17 @@ sub _purge_queue {
         }
     );
 
+	# supprimer tous les jobs "waiting"
+
+	$self->application->redis->keys(
+		"deps:$queue_name:*",
+		sub {
+			my @keys = map { /deps:(.+)/ ; $1 ; } @_;
+			for my $key (@keys){
+			    $self->_remove_from_deps($queue_name, $key);
+			}
+		}
+	);
 
     $self->application->redis->del($self->_queue_delayed($queue_name));
     $self->application->redis->del($self->_queue_uniq($queue_name));

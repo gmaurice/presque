@@ -28,13 +28,22 @@ sub get {
                         $queue_name,
                         sub {
                             my $failed = shift;
-                            $self->entity(
-                                {   queue_name    => $queue_name,
-                                    job_count     => $size || 0,
-                                    job_failed    => $failed || 0,
-                                    job_processed => $processed || 0,
-                                }
-                            );
+                            $self->application->redis->keys(
+                                "deps:$queue_name:*",
+                                sub {
+                                    my $jobs = shift;
+                                    my $waiting = scalar( @$jobs );
+                                    $self->entity(
+                                        {
+                                            queue_name    => $queue_name,
+                                            job_pending   => $size || 0,
+                                            job_failed    => $failed || 0,
+                                            job_waiting   => $waiting || 0,
+                                            job_processed => $processed || 0,
+                                        }
+                                    );
+                    	    	}
+                    	    );
                         }
                     );
                 }

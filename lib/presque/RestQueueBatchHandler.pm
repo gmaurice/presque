@@ -88,14 +88,16 @@ sub _create_job {
     my $jobs    = $content->{jobs};
 
     if (ref $jobs ne 'ARRAY') {
-        $self->http_error('jobs should be an array of job');
+        $self->http_error('jobs have to be an array of jobs');
         return;
     }
 
     my $input = $self->request->parameters;
     my $delayed = $input->{delayed} if $input && $input->{delayed};
+    my $depends = $input->{depends} if $input && $input->{depends};
 
     foreach my $job (@$jobs) {
+        my $uniq = $job->{uniq};
         $job = JSON::encode_json($job);
 
         $self->application->redis->incr(
@@ -110,7 +112,11 @@ sub _create_job {
                         my $lkey       = $self->_queue($queue_name);
 
                         $self->new_queue($queue_name, $lkey) if ($uuid == 1);
-                        $self->push_job($queue_name, $lkey, $key, $delayed);
+                        if ($depends){
+                            $self->_insert_to_queue($queue_name, $job, $delayed, $uniq, $depends);
+                        }else{
+                            $self->push_job($queue_name, $lkey, $key, $delayed, $uniq);
+                        }
                     }
                 );
             }

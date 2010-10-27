@@ -37,18 +37,18 @@ test_psgi $app, sub {
     # get queue informations
     $res = get_stats_from_queue($cb);
     is_deeply JSON::decode_json $res->content,
-      { job_processed => 0,
-        job_count     => 0,
-        queue_name    => 'presque_test',
-        job_failed    => 0,
+      {
+        job_pending     => 0,
+        job_waiting     => 0,
+        job_failed      => 0,
+        job_processed   => 0,
+        queue_name      => 'presque_test',
       },
       'good job info result';
 
     # no job in queue
     $res = get_job($cb);
-    ok !$res->is_success, 'no job for this queue';
-    is_deeply JSON::decode_json($res->content), {error => "no job"},
-      'error message is valid';
+    is $res->code, 204, 'no job for this queue';
 
     # create a new job
     my $job = {foo => "bar"};
@@ -58,10 +58,12 @@ test_psgi $app, sub {
     # info about a queue
     $res = get_stats_from_queue($cb);
     is_deeply JSON::decode_json $res->content,
-      { job_count     => 1,
-        job_failed    => 0,
-        job_processed => 0,
-        queue_name    => 'presque_test',
+      { 
+        job_pending     => 1,
+        job_waiting     => 0,
+        job_failed      => 0,
+        job_processed   => 0,
+        queue_name      => 'presque_test',
       },
       'valid jobs info';
 
@@ -75,7 +77,7 @@ test_psgi $app, sub {
 
     # no job to do now
     $res = get_job($cb);
-    ok !$res->is_success, 'no job';
+    is $res->code, 204, 'no job';
     sleep(2);
     $res = get_job($cb);
     ok $res->is_success, 'job found';
@@ -127,7 +129,7 @@ test_psgi $app, sub {
 
     # no job in queue
     $res = get_job($cb);
-    is $res->code, 404, 'no more job in queue';
+    is $res->code, 204, 'no more job in queue';
 
     # job failed
     $res = failed_job($cb);

@@ -19,18 +19,19 @@ my $app = presque->app(
     }
 );
 
-my $queue            = "presque_test";
-my $other_queue      = "presque_test_other";
-my $worker_id        = "worker_foo";
-my $queue_url        = "http://localhost/q/$queue";
-my $other_queue_url  = "http://localhost/q/$other_queue";
-my $queue_batch_url  = "http://localhost/qb/$queue";
-my $job_url          = "http://localhost/j/$queue";
-my $other_job_url    = "http://localhost/j/$other_queue";
-my $status_url       = "http://localhost/status/$queue";
-my $worker_stats_url = "http://localhost/w/?queue_name=$queue";
-my $worker_url       = "http://localhost/w/";
-my $control_url      = "http://localhost/control/$queue";
+my $queue            	  = "presque_test";
+my $other_queue      	  = "presque_test_other";
+my $worker_id        	  = "worker_foo";
+my $queue_url        	  = "http://localhost/q/$queue";
+my $other_queue_url  	  = "http://localhost/q/$other_queue";
+my $queue_batch_url  	  = "http://localhost/qb/$queue";
+my $other_queue_batch_url = "http://localhost/qb/$other_queue";
+my $job_url          	  = "http://localhost/j/$queue";
+my $other_job_url    	  = "http://localhost/j/$other_queue";
+my $status_url       	  = "http://localhost/status/$queue";
+my $worker_stats_url 	  = "http://localhost/w/?queue_name=$queue";
+my $worker_url       	  = "http://localhost/w/";
+my $control_url      	  = "http://localhost/control/$queue";
 
 test_psgi $app, sub {
     my $cb = shift;
@@ -43,73 +44,146 @@ test_psgi $app, sub {
     ok $res->is_success, 'new job with depends inserted';
 
     # info about a queue
-     $res = get_stats_from_queue($cb);
-     is_deeply JSON::decode_json($res->content),
-       { job_count     => 0,
-         job_failed    => 0,
-         job_processed => 0,
-         queue_name    => $queue,
-       },
-       'valid jobs info after jobs + depends';
+    $res = get_stats_from_queue($cb);
+    is_deeply JSON::decode_json $res->content,
+      {
+        job_pending   => 0,
+        job_waiting   => 1,
+        job_failed    => 0,
+        job_processed => 0,
+        queue_name    => $queue,
+      },
+      'valid jobs info after jobs + depends';
 
     # no job to do now
     $res = get_job($cb);
-    ok !$res->is_success, 'no job';
+    is $res->code, 204, 'no job for this queue';
 
-    create_job($cb, { job => "a" } , $queue_url. "?uniq=UNIQ_a");
+    create_job($cb, { job => "a" }, $queue_url."?uniq=UNIQ_a");
     $res = get_job($cb);
     is_deeply JSON::decode_json($res->content), { job => "a" }, 'got job UNIQ_a';
 
     # info about a queue
-     $res = get_stats_from_queue($cb);
-     is_deeply JSON::decode_json($res->content),
-       { job_count     => 0,
-         job_failed    => 0,
-         job_processed => 1,
-         queue_name    => $queue,
-       },
-       'valid jobs info after get_job UNIQ_a';
-       
-    $res = get_job($cb);
-    ok !$res->is_success, 'no job';
+    $res = get_stats_from_queue($cb);
+    is_deeply JSON::decode_json $res->content,
+      {
+        job_pending   => 0,
+        job_waiting   => 1,
+        job_failed    => 0,
+        job_processed => 1,
+        queue_name    => $queue,
+      },
+      'valid jobs info after get_job UNIQ_a';
 
-    create_job($cb, { job => "b" }, $other_queue_url. "?uniq=UNIQ_b");
+    $res = get_job($cb);
+    is $res->code, 204, 'no job';
+
+    create_job($cb, { job => "b" }, $other_queue_url."?uniq=UNIQ_b");
     $res = get_job($cb, $other_queue_url);
     is_deeply JSON::decode_json($res->content), { job => "b" }, 'got job UNIQ_b';
 
     # info about a queue
     $res = get_stats_from_queue($cb, $other_job_url);
-     is_deeply JSON::decode_json($res->content),
-       { job_count     => 0,
-         job_failed    => 0,
-         job_processed => 1,
-         queue_name    => $other_queue,
-       },
-       'valid jobs info after get_job UNIQ_b';
-       
+    is_deeply JSON::decode_json($res->content),
+      {
+        job_pending   => 0,
+        job_waiting   => 0,
+        job_failed    => 0,
+        job_processed => 1,
+        queue_name    => $other_queue,
+      },
+      'valid jobs info after get_job UNIQ_b';
+
     $res = get_job($cb);
     is_deeply JSON::decode_json($res->content), $job, 'got job with depends';
 
     # info about a queue
     $res = get_stats_from_queue($cb, $job_url);
-     is_deeply JSON::decode_json($res->content),
-       { job_count     => 0,
-         job_failed    => 0,
-         job_processed => 2,
-         queue_name    => $queue,
-       },
-       'valid jobs info after get_job UNIQ_b';
+    is_deeply JSON::decode_json($res->content),
+      {
+        job_pending   => 0,
+        job_waiting   => 0,
+        job_failed    => 0,
+        job_processed => 2,
+        queue_name    => $queue,
+      },
+      'valid jobs info after get_job UNIQ_b';
+
+    # batch inserts
+    create_job( $cb, { foo => 3 }, $other_queue_url."?uniq=UNIQ_3");
+    create_job( $cb, { foo => 4 }, $other_queue_url."?uniq=UNIQ_4");
+    my $jobs = [ { foo => 1 }, { foo => 2 } ];
+    $res = create_jobs( $cb, $jobs,
+        $queue_batch_url."?depends=$other_queue:UNIQ_3,$other_queue:UNIQ_4");
+
+    $res = get_stats_from_queue($cb, $other_job_url);
+    is_deeply JSON::decode_json($res->content),
+      {
+        job_pending   => 2,
+        job_waiting   => 0,
+        job_failed    => 0,
+        job_processed => 1,
+        queue_name    => $other_queue,
+      },
+      'valid jobs info after batch create jobs UNIQ_3,UNIQ_4';
+
+    $res = get_stats_from_queue($cb, $job_url);
+    is_deeply JSON::decode_json($res->content),
+      {
+        job_pending   => 0,
+        job_waiting   => 2,
+        job_failed    => 0,
+        job_processed => 2,
+        queue_name    => $queue,
+      },
+      'valid jobs info after create jobs 1 & 2';
+
+    $res = get_jobs($cb, $other_queue_batch_url."?batch_size=2");
+    sleep 1;    # ensure that asynchronous resolving of dependencies is done
+
+    $res = get_stats_from_queue( $cb, $job_url );
+    is_deeply JSON::decode_json( $res->content ),
+      {
+        job_pending   => 2,
+        job_waiting   => 0,
+        job_failed    => 0,
+        job_processed => 2,
+        queue_name    => $queue,
+      },
+      'valid jobs info after 2 get_job for 3 & 4';
+
+    # batch fetch
+    $res     = get_jobs($cb);
+    $content = JSON::decode_json $res->content;
+    is_deeply $jobs, [ map { JSON::decode_json $_ } @$content ],
+      'valid get_jobs after depends';
 
     # control queue
     $res = control_queue($cb);
     is_deeply JSON::decode_json($res->content),
-      { status => 1,
+      {
+        status => 1,
         queue  => 'presque_test'
       },
       'queue is open';
-      
-     purge_queue($cb, $queue_url);
-     purge_queue($cb, $other_queue_url);
+
+    # purge queue with waiting jobs
+    create_job($cb, { job => "AhAh" }, $queue_url."?uniq=DUMMY" );
+    create_job($cb, { job => "BhBh" }, $queue_url."?uniq=DUMMY" );
+    purge_queue( $cb, $queue_url );
+    $res = get_stats_from_queue($cb, $job_url);
+    is_deeply JSON::decode_json($res->content),
+      {
+        job_pending   => 0,
+        job_waiting   => 0,
+        job_failed    => 0,
+        job_processed => 0,
+        queue_name    => $queue,
+      },
+      'purge queue with waiting jobs (depends table)';
+
+    purge_queue($cb, $queue_url);
+    purge_queue($cb, $other_queue_url);
 
 };
 
