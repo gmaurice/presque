@@ -42,9 +42,11 @@ sub h {
 sub app {
     my ($class, %args) = @_;
     my $self = $class->new(
-        [   '/qb/(.*)' => h('presque::RestQueueBatchHandler'),
-            '/q/(.*)'  => h('presque::RestQueueHandler'),
+        [   
+            '/qb/(.*)'      => h('presque::RestQueueBatchHandler'),
+            '/q/(.*)'       => h('presque::RestQueueHandler'),
             '/j/(.*)'       => h('presque::JobQueueHandler'),
+            '/wj/(.*)'      => h('presque::RestQueueWaitingJobsHandler'),
             '/w/(.*)'       => h('presque::WorkerHandler'),
             '/status/(.*)'  => h('presque::StatusHandler'),
             '/control/(.*)' => h('presque::ControlHandler'),

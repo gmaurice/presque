@@ -92,9 +92,7 @@ sub _remove_from_deps {
 						my ($deps_revert_uuids) = @_;
 						my $dep_revert_uuid;
 						for $dep_revert_uuid (@$deps_revert_uuids){
-	
 		#warn $self->_deps_queue_uuid($dep_revert_uuid) ." x> ". $queue_name.":".$uniq;
-	
 							$self->application->redis->srem(
 								$self->_deps_queue_uuid($dep_revert_uuid),
 								$queue_name.":".$uniq
@@ -117,7 +115,6 @@ sub _remove_from_deps {
 						$self->application->redis->del( $self->_deps_queue_uniq_revert($queue_name, $uniq) );
 					}
 				);
-			
 			}
 		);
 	}
@@ -260,8 +257,9 @@ sub _failed_job {
 sub _purge_queue {
     my ($self, $queue_name) = @_;
 
-    # supprimer tous les jobs "pending"
-
+    # libérer tous les jobs "waiting"
+    $self->release_waiting_jobs($queue_name, 0);
+	
     $self->application->redis->llen(
         $self->_queue($queue_name),
         sub {
@@ -280,17 +278,6 @@ sub _purge_queue {
         }
     );
 
-	# supprimer tous les jobs "waiting"
-
-	$self->application->redis->keys(
-		"deps:$queue_name:*",
-		sub {
-			my @keys = map { /deps:(.+)/ ; $1 ; } @_;
-			for my $key (@keys){
-			    $self->_remove_from_deps($queue_name, $key);
-			}
-		}
-	);
 
     $self->application->redis->del($self->_queue_delayed($queue_name));
     $self->application->redis->del($self->_queue_uniq($queue_name));

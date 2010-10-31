@@ -73,7 +73,7 @@ test_psgi $app, sub {
     is_deeply JSON::decode_json $res->content, $job, 'job is good';
 
     # insert a delayed job
-    $res = create_job($cb, {foo => 'baz'}, $queue_url . '?delayed='.(time() + 2));
+    $res = create_job($cb, {foo => 'baz'}, $queue_url . '?delayed='.(time() + 1));
 
     # no job to do now
     $res = get_job($cb);

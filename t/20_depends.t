@@ -32,6 +32,7 @@ my $status_url       	  = "http://localhost/status/$queue";
 my $worker_stats_url 	  = "http://localhost/w/?queue_name=$queue";
 my $worker_url       	  = "http://localhost/w/";
 my $control_url      	  = "http://localhost/control/$queue";
+my $wj_queue_url          = "http://localhost/wj/$queue";
 
 test_psgi $app, sub {
     my $cb = shift;
@@ -140,7 +141,6 @@ test_psgi $app, sub {
 
     $res = get_jobs($cb, $other_queue_batch_url."?batch_size=2");
     sleep 1;    # ensure that asynchronous resolving of dependencies is done
-
     $res = get_stats_from_queue( $cb, $job_url );
     is_deeply JSON::decode_json( $res->content ),
       {
@@ -158,19 +158,12 @@ test_psgi $app, sub {
     is_deeply $jobs, [ map { JSON::decode_json $_ } @$content ],
       'valid get_jobs after depends';
 
-    # control queue
-    $res = control_queue($cb);
-    is_deeply JSON::decode_json($res->content),
-      {
-        status => 1,
-        queue  => 'presque_test'
-      },
-      'queue is open';
-
     # purge queue with waiting jobs
-    create_job($cb, { job => "AhAh" }, $queue_url."?uniq=DUMMY" );
-    create_job($cb, { job => "BhBh" }, $queue_url."?uniq=DUMMY" );
-    purge_queue( $cb, $queue_url );
+    create_job($cb, { job => "AhAh" }, $queue_url."?depends=DUMMY" );
+    create_job($cb, { job => "BhBh" }, $queue_url."?depends=DUMMY" );
+
+    purge_queue($cb, $queue_url);
+
     $res = get_stats_from_queue($cb, $job_url);
     is_deeply JSON::decode_json($res->content),
       {
@@ -182,7 +175,46 @@ test_psgi $app, sub {
       },
       'purge queue with waiting jobs (depends table)';
 
+    # force release of waiting jobs
+    create_job($cb, {foo => "bar"} , $queue_url."?depends=UNIQ_a,$other_queue:UNIQ_b");
+    create_job($cb, {foo => "bar2"}, $queue_url."?depends=UNIQ_a,$other_queue:UNIQ_b");
+    $res = get_stats_from_queue($cb, $job_url);
+    is_deeply JSON::decode_json($res->content),
+      {
+        job_pending   => 0,
+        job_waiting   => 2,
+        job_failed    => 0,
+        job_processed => 0,
+        queue_name    => $queue,
+      },
+      'before release waiting jobs of queue';
+
+    release_waiting_jobs($cb, $wj_queue_url);
+    $res = get_stats_from_queue($cb, $job_url);
+    is_deeply JSON::decode_json($res->content),
+      {
+        job_pending   => 2,
+        job_waiting   => 0,
+        job_failed    => 0,
+        job_processed => 0,
+        queue_name    => $queue,
+      },
+      'release waiting jobs of queue';
+
+    # purge queue after releasing
     purge_queue($cb, $queue_url);
+    sleep 1;
+    $res = get_stats_from_queue($cb, $job_url);
+    is_deeply JSON::decode_json($res->content),
+      {
+        job_pending   => 0,
+        job_waiting   => 0,
+        job_failed    => 0,
+        job_processed => 0,
+        queue_name    => $queue,
+      },
+      'finally purge waiting jobs of queue';
+
     purge_queue($cb, $other_queue_url);
 
 };
@@ -287,6 +319,14 @@ sub purge_queue {
     my ($cb, $url) = @_;
     $url ||= $queue_url;
     my $req = HTTP::Request->new(DELETE => $url);
+    ok my $res = $cb->($req);
+    $res;
+}
+
+sub release_waiting_jobs {
+    my ($cb, $url) = @_;
+    $url ||= $wj_queue_url;
+    my $req = HTTP::Request->new(POST => $url);
     ok my $res = $cb->($req);
     $res;
 }

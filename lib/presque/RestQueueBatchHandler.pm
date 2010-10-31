@@ -99,28 +99,7 @@ sub _create_job {
     foreach my $job (@$jobs) {
         my $uniq = $job->{uniq};
         $job = JSON::encode_json($job);
-
-        $self->application->redis->incr(
-            $self->_queue_uuid($queue_name),
-            sub {
-                my $uuid = shift;
-                my $key = $self->_queue_key($queue_name, $uuid);
-                $self->application->redis->set(
-                    $key, $job,
-                    sub {
-                        my $status_set = shift;
-                        my $lkey       = $self->_queue($queue_name);
-
-                        $self->new_queue($queue_name, $lkey) if ($uuid == 1);
-                        if ($depends){
-                            $self->_insert_to_queue($queue_name, $job, $delayed, $uniq, $depends);
-                        }else{
-                            $self->push_job($queue_name, $lkey, $key, $delayed, $uniq);
-                        }
-                    }
-                );
-            }
-        );
+        $self->_insert_to_queue($queue_name, $job, $delayed, $uniq, $depends);
     }
 
     $self->response->code(201);
