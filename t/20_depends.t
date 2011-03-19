@@ -155,6 +155,7 @@ test_psgi $app, sub {
     # batch fetch
     $res     = get_jobs($cb);
     $content = JSON::decode_json $res->content;
+    # sometimes, this test fails because of the order not kept
     is_deeply $jobs, [ map { JSON::decode_json $_ } @$content ],
       'valid get_jobs after depends';
 
