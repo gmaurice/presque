@@ -42,6 +42,9 @@ sub post {
     elsif ( $json->{status} eq 'stop' ) {
         $self->_set_status( $queue_name, 0 );
     }
+    elsif ( $json->{queues} ) {
+    	
+    }
     else {
         $self->http_error('invalid status '.$content->{status});
     }
