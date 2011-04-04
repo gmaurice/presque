@@ -2,6 +2,7 @@ package presque::ControlHandler;
 
 use JSON;
 use Moose;
+use YAML::Syck;
 extends 'Tatsumaki::Handler';
 
 with
@@ -36,14 +37,102 @@ sub post {
     return $self->http_error('content is missing') if !$content;
 
     my $json = JSON::decode_json( $content );
-    if ( $json->{status} eq 'start' ) {
+    if ( defined $json->{status} && $json->{status} eq 'start' ) {
         $self->_set_status( $queue_name, 1 );
     }
-    elsif ( $json->{status} eq 'stop' ) {
+    elsif ( defined $json->{status} && $json->{status} eq 'stop' ) {
         $self->_set_status( $queue_name, 0 );
     }
-    elsif ( $json->{queues} ) {
-    	
+    elsif ( defined $json->{type} && $json->{type} eq 'virtual' ) {
+        my $vkey = $self->_virt_queue($queue_name);
+
+        $self->application->redis->exists(
+            $self->_queue($queue_name),
+            sub {
+                my $conflict = shift;
+                $self->http_error("$queue_name conflicts with an existing queue", 409) if $conflict;
+                
+				if( defined $json->{action} && $json->{action} eq 'destroy' ){
+            	   $self->application->redis->del(
+            	       $vkey,
+            	       sub { 
+            	           my $removed = shift;
+            	           if ($removed){
+                    	       $self->entity(
+                                    {   queue    => $queue_name,
+                    		            response => 'virtual queue destroyed'
+                    		        }
+                    	       );
+                	        }else{
+                	           $self->http_error("unable to clear $queue_name");
+                	        }
+            	       }
+            	   );
+            	}elsif( defined $json->{action} && $json->{action} eq 'remove' ){
+        			my %q_to_r = map { $_ => 1 } @{$json->{queues}};
+        			my $size;
+        			$self->application->redis->llen(
+        				$vkey,
+        				sub { 
+        				    $size = shift;
+                    		$self->application->redis->lrange(
+                    			$vkey, 0, $size-1,
+                				sub {
+                					my $prev_q = shift;
+                					for my $i (0..$size-1){
+                						if ( defined $prev_q->[$i] && ! $q_to_r{$prev_q->[$i]} ){
+                							$self->application->redis->rpush(
+                								"rm:$vkey", $prev_q->[$i]
+                							);
+                						}
+                					}
+                					$self->application->redis->del(
+                						$vkey,
+                						sub {
+                							for (1..$size){
+                								$self->application->redis->rpoplpush(
+                									"rm:$vkey", $vkey
+                								);
+                							}
+                							$self->application->redis->del(
+                								"rm:$vkey"
+                							);
+                							$self->entity({
+                								queue => $queue_name, 
+                								response => "queues removed"
+                							});
+                						}
+                					);
+                				}
+                            );
+                        }
+            		);
+            	}elsif( defined $json->{action} && $json->{action} eq 'set' ){
+        		    $self->application->redis->del(
+        				$self->_virt_queue($queue_name),
+        				sub {
+        			    	for my $real_queue (@{$json->{queues}}){
+        				    	$self->application->redis->lpush(
+        							$self->_virt_queue($queue_name),
+        							$real_queue
+        			    		);
+        			    	}
+        			    	$self->entity(
+        				        {   queue    => $queue_name,
+        				            response => 'virtual queue set',
+        				        }
+        			        );			
+        				}
+        	    	);
+        	    }else{
+			    	$self->http_error(
+				        {   queue    => $queue_name,
+				            response => 'no action provided',
+				        }
+			        );        	    
+        	    }
+            }
+        );
     }
     else {
         $self->http_error('invalid status '.$content->{status});
