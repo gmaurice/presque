@@ -7,6 +7,11 @@ sub _queue {
     return join(':', $queue_name, 'queue');
 }
 
+sub _virt_queue {
+	my ($self, $queue_name) = @_;
+	return join(':', 'v', $queue_name);
+}
+
 sub _queue_set {
     return 'QUEUESET';
 }

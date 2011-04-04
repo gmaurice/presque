@@ -17,33 +17,64 @@ sub get {
         my $input     = $self->request->parameters;
         my $with_desc = ($input && $input->{with_desc}) ? 1 : 0;
         my $key       = $self->_queue($queue_name);
-        $self->application->redis->llen(
+        my $vkey      = $self->_virt_queue($queue_name);
+
+        $self->application->redis->exists(
             $key,
             sub {
-                my $size = shift;
-                if ($with_desc) {
-                    $self->application->redis->lrange(
-                        $self->_queue($queue_name),
-                        0, $size,
+                my $queue_exists = shift;
+                if ($queue_exists){
+                    $self->application->redis->llen(
+                        $key,
                         sub {
-                            my $jobs = shift;
-                            $self->application->redis->mget(
-                                @$jobs,
-                                sub {
-                                    my $full_jobs = shift;
-                                    $self->entity(
-                                        {   queue => $queue_name,
-                                            size  => $size,
-                                            jobs  => $full_jobs,
-                                        }
-                                    );
-                                }
-                            );
+                            my $size = shift;
+                            if ($with_desc) {
+                                $self->application->redis->lrange(
+                                    $self->_queue($queue_name),
+                                    0, $size,
+                                    sub {
+                                        my $jobs = shift;
+                                        $self->application->redis->mget(
+                                            @$jobs,
+                                            sub {
+                                                my $full_jobs = shift;
+                                                $self->entity(
+                                                    {   queue => $queue_name,
+                                                        size  => $size,
+                                                        jobs  => $full_jobs,
+                                                    }
+                                                );
+                                            }
+                                        );
+                                    }
+                                );
+                            }
                         }
                     );
-                }
-                else {
-                    $self->entity({queue => $queue_name, size => $size});
+                }else{
+                    $self->application->redis->llen(
+                    	$vkey,
+                    	sub {
+                            my $size = shift;
+                            if ($size){
+                				$self->application->redis->lrange(
+                					$vkey, 0, $size-1,
+                					sub {
+                						my @queues = reverse( @{(shift)} );
+                						$self->entity(
+                						  {   type => "virtual",
+                						      queue => $queue_name,
+                						      queues => \@queues,
+                						      size => $size
+                						  }
+                						);
+                					}
+                				);
+                            }else {
+                                $self->entity({queue => $queue_name, size => $size});
+                            }
+                    	}
+                    );
                 }
             }
         );

@@ -15,10 +15,56 @@ with
 
 __PACKAGE__->asynchronous(1);
 
-sub get    { (shift)->_is_queue_opened(shift) }
+sub get    { (shift)->_meta_is_queue_opened(shift) }
 sub post   { (shift)->_create_job(shift) }
 sub put    { (shift)->_failed_job(shift) }
 sub delete { (shift)->_purge_queue(shift) }
+
+sub f{
+	my ($self, $vkey, $vq_size) = @_;
+
+	$self->application->redis->rpoplpush(
+		$vkey, $vkey,
+		sub {
+			my $queue_name = shift;
+			my $key = $self->_queue($queue_name);
+			$self->application->redis->llen(
+            	$key,
+            	sub {
+            		my $s = shift;
+                    $vq_size--;
+            		if ($s or $vq_size == 0){
+						$self->_is_queue_opened($queue_name);
+            		}else{
+                        $self->f($vkey, $vq_size);
+            		}
+            	}
+            );
+		}
+	);
+}
+
+sub _meta_is_queue_opened {
+    my ($self, $queue_name) = @_;
+	my $vkey = $self->_virt_queue($queue_name);
+
+	$self->application->redis->exists(
+		$vkey,
+		sub {
+			my $ex = shift;
+			if ($ex){
+                $self->application->redis->llen(
+                    $vkey,
+                    sub {
+        				$self->f($vkey, shift);
+                    }
+                );
+			}else{
+				$self->_is_queue_opened($queue_name);				
+			}
+		}
+	);
+}
 
 sub _is_queue_opened {
     my ($self, $queue_name) = @_;
